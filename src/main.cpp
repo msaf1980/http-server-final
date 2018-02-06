@@ -58,7 +58,9 @@ extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 
 /* #define BACKLOG 20 */
 #define BACKLOG SOMAXCONN
-#define QUEUE 32 /* events queue for epoll or kqueue, also max workers */
+#define QUEUE 4 /* events queue for epoll or kqueue, also max workers */
+
+/* #define MAXCONN 32 */
 
 #define LOG_FACILITY LOG_LOCAL1
 
