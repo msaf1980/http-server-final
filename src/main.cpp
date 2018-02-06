@@ -31,9 +31,11 @@
 extern "C"
 {
 #endif
+
 /* force switch to posix-compliant strerror_r instead of GNU for portability */
 extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 #define strerror_r __xpg_strerror_r
+
 #ifdef __cplusplus
 }
 #endif
@@ -54,7 +56,8 @@ extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 #define EPOLL_TOUT -1 /* epoll timeout */
 #endif
 
-#define BACKLOG 20
+/* #define BACKLOG 20 */
+#define BACKLOG SOMAXCONN
 #define QUEUE 32 /* events queue for epoll or kqueue, also max workers */
 
 #define LOG_FACILITY LOG_LOCAL1
@@ -91,29 +94,22 @@ int log_init(const char *name)
 	return 0;
 }
 
+void log_print_v(const int pri, const char *fmt, va_list ap)
+{
+	syslog(pri, fmt, ap);
+}
+
 void log_print(const int pri, const char *fmt, ...)
 {
-	/* char *msg = NULL; */
 	va_list ap;
 	va_start(ap, fmt);
-	syslog(pri, fmt, ap);
+	vsyslog(pri, fmt, ap);
 	va_end(ap);
-	/*
-	 va_start(ap, fmt);
-	vsnprintf_l(&msg, 0, 0, fmt, ap);
-	va_end(ap);
-	if (msg)
-	{
-		free(msg);
-	}
-	*/
 }
 
 void log_print_errno(const int pri, int err, const char *descr1, const char *descr2)
 {
-	/* char *msg; */
 	char err_buf[1024];
-	//err_buf[0] = '\0';
 	strerror_r(err, err_buf, sizeof(err_buf));
 	if (descr1 != NULL && descr2 != NULL)
 		log_print(pri, "%s %s: %s (%d)", descr1, descr2, err_buf, err);
@@ -121,8 +117,8 @@ void log_print_errno(const int pri, int err, const char *descr1, const char *des
 		log_print(pri, "%s: %s (%d)", descr1, err_buf, err);
 	else if (descr2 != NULL) 
 		log_print(pri, "%s: %s (%d)", descr2, err_buf, err);
-  else
-		log_print(pri, "%s (%d)", descr2, err_buf, err);
+	else
+		log_print(pri, "%s (%d)", err_buf, err);
 }
 
 /*
@@ -465,7 +461,7 @@ int process_request(int sock_fd, const char *ip, char *buf, ssize_t size)
 	}
 	if (s == len || s == 0)
 	   close_socket(sock_fd, 1, 0);
-	log_request(ip, type.c_str(), version.c_str(), path.c_str(), respsize, status);
+	//log_request(ip, type.c_str(), version.c_str(), path.c_str(), respsize, status);
 	return 0;
 }
 
@@ -577,7 +573,8 @@ int loop_epoll(int srv_fd)
 	EC_ERRNO( (epoll_fd = epoll_create1(0)) == -1, EXIT,
 		  log_print_errno(LOG_ERR, ec, "epoll_create", NULL) );
 
-	EPOLL_EVENT_SET(event, srv_fd, EPOLLIN | EPOLLET);
+	/* EPOLL_EVENT_SET(event, srv_fd, EPOLLIN | EPOLLET); */
+	EPOLL_EVENT_SET(event, srv_fd, EPOLLIN);
 	EC_ERRNO( epoll_ctl(epoll_fd, EPOLL_CTL_ADD, srv_fd, &event) == -1, EXIT,
 		  log_print_errno(LOG_ERR, ec, "epoll add listen socket", NULL) );
 	
