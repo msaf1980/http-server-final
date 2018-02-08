@@ -134,7 +134,7 @@ void log_debug(const char *fmt, ...)
 	va_end(ap);
 }
 
-#define LOG_DEBUG(cond, level, dlevel, fmt, ...) \
+#define LOG_DEBUG_IF(cond, level, dlevel, fmt, ...) \
 	if ( level >= dlevel && (cond) ) log_debug(fmt, __VA_ARGS__)
 
 void log_print_errno(const int pri, int err, const char *descr1, const char *descr2)
