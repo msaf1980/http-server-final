@@ -15,19 +15,20 @@ typedef struct
 	size_t bsize; /* buffer size */
 	size_t r; /* bytes in buffer */
 	size_t s; /* send bytes */
+	short block; /* block I/O event */
 	//short send; /* send in progress */
 } sock_item;
 
 #define SOCK_ITEM_INIT(si, sd) \
 		do { \
 			si.sock_fd = sd; si.fd = -1; si.buf = NULL; \
-			si.r = 0; si.s = 0; \
+			si.r = 0; si.s = 0; si.block = 0; \
 		} while (0)
 
 #define SOCK_ITEM_PINIT(si, sd) \
 		do { \
 			si->sock_fd = sd; si->fd = -1; si->buf = NULL; \
-			si->r = 0; si->s = 0; \
+			si->r = 0; si->s = 0; si->block = -1; \
 		} while (0)
 
 #define SOCK_ITEM_FREE(si) \
