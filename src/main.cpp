@@ -82,12 +82,15 @@ extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 extern short running;
 
 short running = 1;
+short debug = 0;
 short noclose = 0;
 short use_sendfile = 0;
 const char *name = "http_server"; 
 
 sock_s cli_socks;
 ssize_t bsize = BUFSIZE;
+
+sock_item si_sys;
 
 struct param
 {
@@ -107,16 +110,32 @@ int log_init(const char *name)
 
 void log_print_v(const int pri, const char *fmt, va_list ap)
 {
-	syslog(pri, fmt, ap);
+	vsyslog(pri, fmt, ap);
 }
 
 void log_print(const int pri, const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	vsyslog(pri, fmt, ap);
+	log_print_v(pri, fmt, ap);
 	va_end(ap);
 }
+
+void log_debug_v(const char *fmt, va_list ap)
+{
+	log_print_v(LOG_DEBUG, fmt, ap);
+}
+
+void log_debug(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	log_debug_v(fmt, ap);
+	va_end(ap);
+}
+
+#define LOG_DEBUG(cond, level, dlevel, fmt, ...) \
+	if ( level >= dlevel && (cond) ) log_debug(fmt, __VA_ARGS__)
 
 void log_print_errno(const int pri, int err, const char *descr1, const char *descr2)
 {
@@ -555,15 +574,16 @@ int read_socket(int sock_fd)
 	socklen_t cli_addr_len;
 
 	/* buffer and buffer size */
-	sock_item *si;
+	sock_item *si = &si_sys;;
 	int res = 0;
 	ssize_t n, read;
+	/*
 	if ( (si = find_socket(&cli_socks, sock_fd)) == NULL )
 	{
 		log_print(LOG_ERR, "%s", "socket descriptor not in table");
 		goto ERROR; 
 	}
-	
+	*/
 	cli_addr_len = sizeof(cli_addr);
 	getsockname(sock_fd, (struct sockaddr *) &cli_addr, &cli_addr_len);
 	inet_ntop(AF_INET, &(cli_addr.sin_addr), ip, INET_ADDRSTRLEN);
