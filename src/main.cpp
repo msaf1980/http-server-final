@@ -378,10 +378,15 @@ ssize_t send_to_socket(int sock_fd, char *buf, size_t size)
  * On connection close (send return 0), errno set to ECONNRESET
  */
 ssize_t send_file(int sock_fd, int fd,
-                  char *buf, size_t size, size_t bsize)
+                  char *buf, size_t size, size_t bsize, size_t *readed, size_t *sended)
 {
         size_t ssize = size, readsize;
        	ssize_t r, s;
+
+	/* buffer state, all 0 on success */
+	*sended  = 0;
+	*readed = 0;
+
         while (ssize > 0)
         {
 			readsize = (ssize > bsize) ? bsize : ssize;
@@ -405,8 +410,14 @@ ssize_t send_file(int sock_fd, int fd,
 			s = send_to_socket(sock_fd, buf, r);
 			if (s > 0)
 				ssize -= s;
-			if (s != r)
+			if (s == -1)
 				break;
+			else if (s != r)
+			{
+				*readed = r;
+				*sended = s;
+				break;
+			}
         }
         return size - ssize;
 }
@@ -449,6 +460,62 @@ int send_header_file(int sock_fd, const char *path, const char *version,
 	return errno;
 }
 
+int send_file_to_socket(int sock_fd, sock_item *si)
+{
+	ssize_t s;
+	if ( si->s > 0 )
+	{
+		si->r = 0;
+		si->s = 0;
+	}
+
+	if (! use_sendfile)
+		s = send_file(sock_fd, si->fd, si->buf, si->fsize - si->sended, si->bsize, &si->r, &si->s);
+	else
+	{
+#if defined(__linux)
+		s = sendfile(sock_fd, si->fd, &si->sended, si->fsize - si->sended);
+//#elif defined(__FreeBSD__)
+#else
+		s = send_file(sock_fd, si->fd, si->buf, si->fsize - si->sended, si->bsize, &si->r, &si->s);
+#endif
+	}
+	if (s > 0)
+	{
+		si->s += s;
+		si->sended += s;
+	}
+	/*
+	 if ( s == si->fsize )
+		return 0;
+	else if ( errno != 0 ) return errno;	
+	*/
+	return errno;
+}
+
+int complete_send(int sock_fd, sock_item *si)
+{
+	size_t s = 0;
+	if ( si->r > si->s )
+	{
+		s = send_to_socket(sock_fd, si->buf + si->s, si->r - si->s );
+		if (s > 0)
+		{
+			si->s += s;
+			if (si->sended >= 0)
+				si->sended += s;
+		}
+		else if (errno != 0)
+			return errno;
+	}
+	if ( si->sended >= 0 )
+	{
+		return send_file_to_socket(sock_fd, si);
+	}
+	return 0;
+
+}
+
 int process_request(int sock_fd, const char *ip, sock_item *si)
 {
 	header_map header;
@@ -488,22 +555,11 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 				if ( res != 0 )
 					return res;
 				/* set_nonblock(si->fd); */
-				if (use_sendfile)
-					s = send_file(sock_fd, si->fd, si->buf, si->fsize, si->bsize);
-				else
-				{
-#if defined(__linux)
-					s = sendfile(sock_fd, si->fd, 0, si->fsize);
-//#elif defined(__FreeBSD__)
-#else
-					s = send_file(sock_fd, si->fd, si->buf, si->fsize);
-#endif
-				}
-				if (s > 0)
-					si->s = s;
-				if ( s == si->fsize )
+				si->sended = 0;
+				if ( si->fsize == 0 )
 					return 0;
-				else if ( errno != 0 ) return errno;	
+				errno = 0;
+				return send_file_to_socket(sock_fd, si);
 			} /* GET */
 		}
 	}
@@ -534,20 +590,24 @@ int read_socket(int sock_fd, sock_item *si)
 	/* buffer and buffer size */
 	int res = 0;
 	ssize_t n, read;
-
 	
 	cli_addr_len = sizeof(cli_addr);
 	getsockname(sock_fd, (struct sockaddr *) &cli_addr, &cli_addr_len);
 	inet_ntop(AF_INET, &(cli_addr.sin_addr), ip, INET_ADDRSTRLEN);
 
-	if (si->s) goto ERROR;
+	if ( si->r == si->s )
+	{
+		si->r = 0;
+		si->s = 0;
+	}
+	if (si->s) return EINVAL;
 	
 	if (si->buf == NULL)
 	{
 		if ( (si->buf = (char *) malloc(bsize)) == NULL )
 		{
 			log_print(LOG_ERR, "%s", "buf alloc");
-			goto ERROR;
+			return ENOMEM;
 		}
 		si->bsize = bsize;
 	}
@@ -558,7 +618,7 @@ int read_socket(int sock_fd, sock_item *si)
 		if (n == 0)
 		{
 			res = ECONNRESET;
-			goto END;
+			break;
 		}
 		else if (n == -1)
 		{
@@ -573,7 +633,10 @@ int read_socket(int sock_fd, sock_item *si)
 				break;		
 			}
 			else /* Close socket on error */
-				goto ERROR;
+			{
+				res = errno;
+				break;
+			}
 		}
 		else
 		{
@@ -587,14 +650,12 @@ int read_socket(int sock_fd, sock_item *si)
 			}
 		}
 	}
+	/*
 	if ( res == EAGAIN || res == EWOULDBLOCK ) 
 		return res;
-END:
+	*/
 	//close_socket(sock_fd, res); 
-	return 0;
-ERROR:
-	//close_socket(sock_fd, res); 
-	return -1;
+	return res;
 }
 
 void client_register(int sock_fd, SA_IN *cli_addr)
@@ -626,7 +687,7 @@ int loop_epoll(int srv_fd)
 		  log_print_errno(LOG_ERR, ec, "epoll_create", NULL) );
 
 	/* EPOLL_EVENT_SET(event, srv_fd, EPOLLIN | EPOLLET); */
-	EPOLL_EVENT_SET(event, srv_fd, EPOLLIN);
+	EPOLL_EVENT_SET( event, srv_fd, EPOLLIN );
 	EC_ERRNO( epoll_ctl(epoll_fd, EPOLL_CTL_ADD, srv_fd, &event) == -1, EXIT,
 		  log_print_errno(LOG_ERR, ec, "epoll add listen socket", NULL) );
 	
@@ -656,7 +717,7 @@ int loop_epoll(int srv_fd)
 				{
 					set_nonblock(cli_fd);
 					client_register(cli_fd, &cli_addr);
-					EPOLL_EVENT_SET(event, cli_fd, EPOLLIN | EPOLLRDHUP);
+					EPOLL_EVENT_SET( event, cli_fd, EPOLLIN | EPOLLRDHUP );
 					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cli_fd, &event) == -1)
 						log_print_errno(LOG_ERR, ec, "epoll add", NULL);
 				}
@@ -678,31 +739,37 @@ int loop_epoll(int srv_fd)
 					else
 					{
 						res = read_socket(events[i].data.fd, si);
-						/*
-						EPOLL_EVENT_SET(event, events[i].data.fd, EPOLLIN | EPOLLRDHUP);
-						if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, events[i].data.fd, &event) == -1)
-							log_print_errno(LOG_ERR, ec, "epoll add", NULL);
-						*/
-
 						if ( res == EAGAIN || res == EWOULDBLOCK )
 						{
 							if ( si->block == 0 )
 							{
-								EPOLL_EVENT_SET(event, events[i].data.fd, EPOLLOUT | EPOLLIN | EPOLLRDHUP);
+								log_print( LOG_INFO, "%s", "async" );
+								EPOLL_EVENT_SET( event, events[i].data.fd, EPOLLOUT | EPOLLIN | EPOLLRDHUP );
 								if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, events[i].data.fd, &event) == -1)
-									log_print_errno(LOG_ERR, ec, "epoll add", NULL);
+									log_print_errno(LOG_ERR, ec, "epoll mod", NULL);
+								else
+									si->block = 1;
 							}
 						}
 						else
 							close_socket(events[i].data.fd, 0); 
 					}
 				}
-				/*
 				else if (events[i].events & EPOLLOUT)
 				{
-					complete_send(events[i].data.fd);
+					sock_item *si;
+					if ( (si = find_socket(&cli_socks, events[i].data.fd)) == NULL )
+					{
+						log_print(LOG_ERR, "%s", "socket descriptor not in table");
+						close_socket(events[i].data.fd, -1); 
+					}
+					else
+					{
+						res = complete_send(events[i].data.fd, si);
+						if ( res != EAGAIN && res != EWOULDBLOCK )
+							close_socket(events[i].data.fd, -1); 
+					}
 				}
-				*/
 
 			}
 		}
