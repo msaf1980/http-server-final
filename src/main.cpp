@@ -82,7 +82,7 @@ extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 extern short running;
 
 short running = 1;
-short debug = 0;
+short verbose = 0;
 short noclose = 0;
 short use_sendfile = 0;
 const char *name = "http_server"; 
@@ -383,9 +383,9 @@ ssize_t send_file(int sock_fd, int fd,
         size_t ssize = size, readsize;
        	ssize_t r, s;
 
-	/* buffer state, all 0 on success */
-	*sended  = 0;
-	*readed = 0;
+		/* buffer state, all 0 on success */
+		*sended  = 0;
+		*readed = 0;
 
         while (ssize > 0)
         {
@@ -398,7 +398,10 @@ ssize_t send_file(int sock_fd, int fd,
 					continue;
 				}
 				else if (errno == EAGAIN || errno == EWOULDBLOCK) /* Block IO */
+				{
+					errno = 0;
 					continue;
+				}
 				else
 					return -1;
 			}
@@ -408,17 +411,25 @@ ssize_t send_file(int sock_fd, int fd,
 				break;
 			}
 			s = send_to_socket(sock_fd, buf, r);
-			if (s > 0)
-				ssize -= s;
-			if (s == -1)
-				break;
-			else if (s != r)
+			if ( verbose > 1 )
 			{
-				*readed = r;
-				*sended = s;
-				break;
+				int saveerrno = errno;
+				log_print(LOG_INFO, "%d: read %lu, send %lu, file pos %lu, errno %d", sock_fd, r, s, lseek( fd, 0, SEEK_CUR ), saveerrno);
+				errno = saveerrno;
 			}
+			if ( s >= 0 )
+			{
+				if (s > 0)
+					ssize -= s;
+			}
+			if ( errno != 0 )
+				break;
         }
+		if ( s >= 0) 
+		{
+			*readed = r;
+			*sended = s;
+		}
         return size - ssize;
 }
 
@@ -432,7 +443,7 @@ int send_header_file(int sock_fd, const char *path, const char *version,
 	sprintf(si->buf, "%s%s", srv_param.root_dir, path);
 	if ( (si->fd = open(si->buf, O_RDONLY)) == -1 )
 	{
-    		snprintf(si->buf, si->bsize, not_found_resp_tmpl, version);
+		snprintf(si->buf, si->bsize, not_found_resp_tmpl, version);
 		*status = HTTP_NOT_FOUND;
 	}
 	else
@@ -463,11 +474,6 @@ int send_header_file(int sock_fd, const char *path, const char *version,
 int send_file_to_socket(int sock_fd, sock_item *si)
 {
 	ssize_t s;
-	if ( si->s > 0 )
-	{
-		si->r = 0;
-		si->s = 0;
-	}
 
 	if (! use_sendfile)
 		s = send_file(sock_fd, si->fd, si->buf, si->fsize - si->sended, si->bsize, &si->r, &si->s);
@@ -481,39 +487,42 @@ int send_file_to_socket(int sock_fd, sock_item *si)
 #endif
 	}
 	if (s > 0)
-	{
-		si->s += s;
 		si->sended += s;
-	}
 	/*
 	 if ( s == si->fsize )
 		return 0;
 	else if ( errno != 0 ) return errno;	
 	*/
+
 	return errno;
 }
 
 int complete_send(int sock_fd, sock_item *si)
 {
+	int res  = 0;
 	size_t s = 0;
 	if ( si->r > si->s )
 	{
-		s = send_to_socket(sock_fd, si->buf + si->s, si->r - si->s );
+		s = send_to_socket( sock_fd, si->buf + si->s, si->r - si->s );
+		res = errno;
 		if (s > 0)
 		{
 			si->s += s;
 			if (si->sended >= 0)
+			{
 				si->sended += s;
+				if (verbose > 1) log_print(LOG_INFO, "%d: resend %lu, read %lu, send %lu, errno %d", sock_fd, s, si->r, si->s, res);
+			}
 		}
-		else if (errno != 0)
-			return errno;
+		if (res != 0)
+			return res;
 	}
 	if ( si->sended >= 0 )
 	{
-		return send_file_to_socket(sock_fd, si);
+		res = send_file_to_socket( sock_fd, si );
+		if (verbose) log_print(LOG_INFO, "%d: sended %lu, fsize %lu, errno %d", sock_fd, si->sended, si->fsize, res);
 	}
-	return 0;
-
+	return res;
 }
 
 int process_request(int sock_fd, const char *ip, sock_item *si)
@@ -577,7 +586,6 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 	s = send_to_socket(sock_fd, si->buf, si->r);
 	if ( s > 0 )
 		si->s = s;
-	//log_request(ip, type.c_str(), version.c_str(), path.c_str(), respsize, status);
 	return errno;
 }
 
@@ -630,6 +638,7 @@ int read_socket(int sock_fd, sock_item *si)
 			else if (errno == EAGAIN || errno == EWOULDBLOCK) /* No more data on nonblocking socket */
 			{
 				res = process_request(sock_fd, ip, si);
+				if (verbose) log_print(LOG_INFO, "%d: sended %lu, fsize %lu, errno %d", sock_fd, si->sended, si->fsize, res);
 				break;		
 			}
 			else /* Close socket on error */
@@ -646,6 +655,7 @@ int read_socket(int sock_fd, sock_item *si)
 				res = process_request(sock_fd, ip, si);
 				//p = rwbuf; read = rwbsize;
 				//r = 0;
+				if (verbose) log_print(LOG_INFO, "%d: sended %lu, fsize %lu, errno %d", sock_fd, si->sended, si->fsize, res);
 				break;
 			}
 		}
@@ -662,7 +672,7 @@ void client_register(int sock_fd, SA_IN *cli_addr)
 {
 	char ip[INET_ADDRSTRLEN];
 	inet_ntop(AF_INET, &(cli_addr->sin_addr), ip, INET_ADDRSTRLEN);
-	log_print(LOG_INFO, "connect from %s", ip);
+	if (verbose) log_print(LOG_INFO, "%d: connect from %s", sock_fd, ip);
 	add_socket(&cli_socks, sock_fd, NULL);
 }
 
@@ -743,7 +753,7 @@ int loop_epoll(int srv_fd)
 						{
 							if ( si->block == 0 )
 							{
-								log_print( LOG_INFO, "%s", "async" );
+								if (verbose) log_print( LOG_INFO, "%d: %s", events[i].data.fd, "async" );
 								EPOLL_EVENT_SET( event, events[i].data.fd, EPOLLOUT | EPOLLIN | EPOLLRDHUP );
 								if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, events[i].data.fd, &event) == -1)
 									log_print_errno(LOG_ERR, ec, "epoll mod", NULL);
@@ -784,8 +794,10 @@ EXIT:
 #ifdef __KQUEUE__
 int loop_kqueue(int srv_fd)
 {
-	int ec = 0, i;
-
+	int ec = 0;
+	int res = 0;
+	int i;
+	
 	int cli_fd;
 
 	socklen_t cli_addrlen;
@@ -833,13 +845,53 @@ int loop_kqueue(int srv_fd)
 			{
 				if (events[i].flags & EV_EOF)
 				{
-					r = 0;
-					close_socket(events[i].ident, r, errno);
+					close_socket(events[i].ident, 0);
 				}
 				else if (events[i].filter == EVFILT_READ)
 				{
-					read_socket(events[i].ident);
+					sock_item *si;
+					if ( (si = find_socket(&cli_socks, events[i].ident)) == NULL )
+					{
+						log_print(LOG_ERR, "%s", "socket descriptor not in table");
+						close_socket(events[i].ident, -1); 
+					}
+					else
+					{
+						res  = read_socket(events[i].ident, si);
+						if ( res == EAGAIN || res == EWOULDBLOCK )
+						{
+							if ( si->block == 0 )
+							{
+								if (verbose) log_print( LOG_INFO, "%d: %s", events[i].ident, "async" );
+								memset(&event, 0, sizeof(event));
+								EV_SET(&event, events[i].ident, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, NULL);
+								if (kevent(kq, &event, 1, NULL, 0, NULL) < 0)
+									log_print_errno(LOG_ERR, errno, "kevent set", NULL);
+								else
+									si->block = 1;
+							}
+						}
+						else
+							close_socket(events[i].ident, 0); 
+					}
 				}
+				else if (events[i].filter == EVFILT_WRITE)
+				{
+					sock_item *si;
+					if ( (si = find_socket(&cli_socks, events[i].ident)) == NULL )
+					{
+						log_print(LOG_ERR, "%s", "socket descriptor not in table");
+						close_socket(events[i].ident, -1); 
+					}
+					else
+					{
+						res = complete_send(events[i].ident, si);
+						if ( res != EAGAIN && res != EWOULDBLOCK )
+							close_socket(events[i].ident, -1); 
+					}
+				}
+
+
 			}
 		} /* event process loop */
 	}
@@ -906,13 +958,14 @@ int main(int argc, char *argv[])
 	int opt = 0;
 	int opt_idx = 0;
 	
-	const char *opts = "h:p:d:s";
+	const char *opts = "h:p:d:sv:";
 	const struct option long_opts[] = {
 		{ "ip",   required_argument, 0,  'h' },
 		{ "port", required_argument, 0,  'p' },
 		{ "dir",  required_argument, 0,  'd' },
-		{ "sendfile", required_argument, 0,  's' },
-		{ 0, 0, 0,  0 }
+		{ "sendfile", no_argument, 0,  's' },
+		{ "verbose", required_argument,  0,  'v' },
+		{ 0, 0, 0, 0 }
 	};
 	
 	while( (opt = getopt_long(argc, argv, opts, long_opts, &opt_idx)) != -1 ) 
@@ -944,6 +997,15 @@ int main(int argc, char *argv[])
 				break;
 			case 's':
 				use_sendfile = 1;
+				break;
+			case 'v':
+				if ( is_num( optarg ) )
+					verbose = atoi( optarg );
+				else
+				{
+					fprintf(stderr, "verbose must be a number\n");
+					return EXIT_FAILURE;
+				}
 				break;
 			default:
 				fprintf(stderr, "unhadled option: %u\n", (unsigned char) opt);

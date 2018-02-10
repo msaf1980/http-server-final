@@ -16,7 +16,6 @@ typedef struct
 	size_t r; /* bytes in buffer */
 	size_t s; /* send bytes from buffer */
 	ssize_t sended; /* total send bytes for data, not header */
-	size_t 
 	short block; /* block I/O event */
 	//short send; /* send in progress */
 } sock_item;
