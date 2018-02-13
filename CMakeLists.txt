@@ -6,17 +6,17 @@ project( ${BIN} )
 set( SOURCE_ROOT src )
 #Scan dir for standart source files (*.c, *.cpp, etc)
 aux_source_directory( ${SOURCE_ROOT} SOURCES )
-include_directories( ${SOURCE_ROOT} )
 
 # files with small reused procedures
 set( SOURCE_EXT external )
 aux_source_directory( ${SOURCE_EXT} SOURCES )
+
 include_directories( ${SOURCE_EXT} )
 
 # install path for make install
 set( INSTALL_PATH /usr/local/bin/ )
 
-set( REQUIRED_LIBRARIES
+set( LIBRARIES
 	stdc++
 	pthread
 )
@@ -39,12 +39,16 @@ set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} ${C_FLAGS_RELEASE}")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${CXX_FLAGS_RELEASE}")
 
 add_executable( ${BIN} ${SOURCES} )
-target_link_libraries( ${BIN} ${REQUIRED_LIBRARIES} )
+target_link_libraries( ${BIN} ${LIBRARIES} )
 
 # Run when 'make install'
-target_link_libraries( ${BIN} ${REQUIRED_LIBRARIES} )
+target_link_libraries( ${BIN} ${LIBRARIES} )
 
 
 #set(CMAKE_CONFIGURATION_TYPES "Release" CACHE STRING "" FORCE)
 set(CMAKE_CONFIGURATION_TYPES "Debug" CACHE STRING "" FORCE)
+
+#set enable testing
+add_subdirectory(tests)
+enable_testing()
 

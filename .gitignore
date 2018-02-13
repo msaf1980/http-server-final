@@ -1,5 +1,6 @@
 ### Vim
 *.swp
+.exrc
 
 ### C
 
@@ -50,4 +51,10 @@ CTestTestfile.cmake
 tags
 
 *.txt
+!CMakeLists.txt
+
+*.log
+
+### Unit tests
+http_header
 

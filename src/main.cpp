@@ -9,6 +9,7 @@
 #include <string.h>
 #include <signal.h>
 #include <syslog.h>
+#include <time.h>
 
 #include <arpa/inet.h>
 
@@ -85,6 +86,8 @@ short verbose = 0;
 short noclose = 0;
 short use_sendfile = 0;
 const char *name = "http_server"; 
+
+const char *time_format = "%a, %d %b %Y %H:%M:%S %Z";
 
 sock_s cli_socks;
 ssize_t bsize = BUFSIZE;
@@ -471,13 +474,29 @@ int send_header_file(int sock_fd, const char *path, const char *version,
 		} else
 		{
 			const char *mime_type = mime_type_by_file_ext(si->buf);
+
+			char now_time[40];
+			char file_mtime[40];
+			time_t t = time(NULL);
+			struct tm tm;
+		       	gmtime_r(&t, &tm);
+			strftime(now_time, sizeof(now_time), time_format, &tm);
+			gmtime_r(&fd_stat.st_mtime, &tm);
+			strftime(file_mtime, sizeof(now_time), time_format, &tm);
+
 			si->fsize = fd_stat.st_size;
+
 			snprintf(si->buf, si->bsize, "%s %s\r\nContent-Type: %s\r\n"
+				 "Date: %s\r\n"
+				 "Last-Modified: %s\r\n"
+				 "Accept-Ranges: bytes\r\n"
 				 "Content-Length: %lu\r\n"
 				 "\r\n", 
 				 version,
 				 ok_resp_tmpl_s,
 				 mime_type,
+				 now_time,
+				 file_mtime,
 				 si->fsize);
 		}
 	}
@@ -561,9 +580,11 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 	auto h_path = header.find("Path");
 	if (h_path != header.end()) path = h_path->second;
 
+	if (verbose > 1) log_print(LOG_INFO, "%s", path.c_str());
+
 	/* Incomplete header */
-	
-	if (header_end == si->buf)
+	if ( header_end == si->buf || path == "-" ||
+	     path[0] == '.' || strstr(path.c_str(), "/.") != NULL )
 		status = HTTP_BAD_REQ;
 	else if (header_end > si->buf)	
 	{
@@ -655,7 +676,7 @@ int read_socket(int sock_fd, sock_item *si)
 			else if (errno == EAGAIN || errno == EWOULDBLOCK) /* No more data on nonblocking socket */
 			{
 				res = process_request(sock_fd, ip, si);
-				if (verbose) log_print(LOG_INFO, "%d: sended %lu, fsize %lu, errno %d", sock_fd, si->sended, si->fsize, res);
+				if (verbose) log_print(LOG_INFO, "%d: sended %ld, fsize %lu, errno %d", sock_fd, si->sended, si->fsize, res);
 				break;		
 			}
 			else /* Close socket on error */
@@ -672,7 +693,7 @@ int read_socket(int sock_fd, sock_item *si)
 				res = process_request(sock_fd, ip, si);
 				//p = rwbuf; read = rwbsize;
 				//r = 0;
-				if (verbose) log_print(LOG_INFO, "%d: sended %lu, fsize %lu, errno %d", sock_fd, si->sended, si->fsize, res);
+				if (verbose) log_print(LOG_INFO, "%d: sended %ld, fsize %lu, errno %d", sock_fd, si->sended, si->fsize, res);
 				break;
 			}
 		}

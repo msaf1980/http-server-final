@@ -6,28 +6,27 @@ const char *parse_http_req_header(const char *msg, const char *msg_end, header_m
 {
 	const char *head = msg;
 	const char *tail = msg;
-/*	
-	if (msg_end - msg < 5)
-		return 1;
-	if ( *(msg_end - 4) == '\r' && *(msg_end - 3) == '\n' &&
-	     *(msg_end - 2) == '\r' && *(msg_end - 2) == '\n' )
-		return 1;
-*/
 
 	// Find request type
 	while (tail != msg_end && *tail != ' ' && *tail != '\0') ++tail;
+	if (tail == head)
+		return NULL;
 	header["Type"] = std::string(head, tail);
 
 	// Find path
 	while (tail != msg_end && *tail == ' ') ++tail;
-	         head = tail;
+        head = tail;
 	while (tail != msg_end && *tail != ' ' && *tail != '\0') ++tail;
-	header["Path"] = std::string(head, tail);
+	if (tail == head)
+		return NULL;
+	header["Req"] = std::string(head, tail);
 
 	// Find HTTP version
 	while (tail != msg_end && *tail == ' ') ++tail;
 	head = tail;
 	while (tail != msg_end && *tail != '\r' && *tail != '\0') ++tail;
+	if (tail == head)
+		return NULL;
 	header["Version"] = std::string(head, tail);
 	if (tail != msg_end - 1 && *tail == '\r')
 		tail++;
@@ -60,5 +59,18 @@ const char *parse_http_req_header(const char *msg, const char *msg_end, header_m
 		return msg;
 	if ( head[1] != '\n' )
 		return msg;
+
+	/* extract POST param */
+	size_t delim = header["Req"].find('?');
+	if (delim == std::string::npos)
+	{
+		header["Path"] = header["Req"];
+		header["Param"] = "";
+	} else
+	{
+		header["Path"] = header["Req"].substr(0, delim);
+		header["Param"] = header["Req"].substr(delim + 1);
+	}
+	
 	return head + 2;
 }
