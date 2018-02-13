@@ -2,7 +2,7 @@
 
 #include "httputils.hpp"
 
-const char *parse_http_req_header(const char *msg, const char *msg_end, header_map & header)
+const char* parse_http_req_header(const char *msg, const char *msg_end, header_map & header)
 {
 	const char *head = msg;
 	const char *tail = msg;

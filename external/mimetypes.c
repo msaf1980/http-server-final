@@ -2,7 +2,7 @@
 
 #include "mimetypes.h"
 
-const char *mime_type_by_file_ext(char *filename)
+const char* mime_type_by_file_ext(char *filename)
 {
 	char *ext = strrchr(filename, '.');
 	if (ext)

@@ -21,6 +21,6 @@ typedef header_map::iterator header_map_it;
  *	NULL - incorrect header
  *	msg - incomplete header
  */
-const char *parse_http_req_header(const char *msg, const char *msg_end, header_map & header);
+const char* parse_http_req_header(const char *msg, const char *msg_end, header_map & header);
 
 #endif /* _HTTPUTILS_HPP_ */

@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-const char *mime_type_by_file_ext(char *filename);
+const char* mime_type_by_file_ext(char *filename);
 
 #ifdef __cplusplus
 }
