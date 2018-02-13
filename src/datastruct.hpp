@@ -2,6 +2,7 @@
 #define _DATASTRUCT_H_
 
 #include <unistd.h>
+#include <stdlib.h>
 
 //#include "sparsepp/spp.h"
 #include <unordered_map>
@@ -17,19 +18,20 @@ typedef struct
 	size_t s; /* send bytes from buffer */
 	ssize_t sended; /* total send bytes for data, not header */
 	short block; /* block I/O event */
+	short process;
 	//short send; /* send in progress */
 } sock_item;
 
 #define SOCK_ITEM_INIT(si, sd) \
 		do { \
 			si.sock_fd = sd; si.fd = -1; si.fsize = 0; si.buf = NULL; \
-			si.r = 0; si.s = 0; si.sended = -1; si.block = 0; \
+			si.r = 0; si.s = 0; si.sended = -1; si.block = 0; si.process = 0; \
 		} while (0)
 
 #define SOCK_ITEM_PINIT(si, sd) \
 		do { \
 			si->sock_fd = sd; si->fd = -1; si->fsize = -1; si->buf = NULL; \
-			si->r = 0; si->s = 0; si->sended = -1; si->block = -1; \
+			si->r = 0; si->s = 0; si->sended = -1; si->block = -1; si->process = 1; \
 		} while (0)
 
 #define SOCK_ITEM_FREE(si) \

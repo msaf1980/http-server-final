@@ -26,6 +26,8 @@
 
 #include <getopt.h>
 
+#include <queue>
+
 #ifdef _GNU_SOURCE
 #ifdef __cplusplus
 extern "C"
@@ -50,34 +52,29 @@ extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 #include "mimetypes.h"
 #include "httputils.hpp"
 #include "httpsrvutils.h"
+#include "thrdpool.h"
+
+#define WORKERS 4
+#define WORKQUEUE  256 
 
 #ifdef __EPOLL__
 #include "epollutils.h"
 #define EPOLL_TOUT -1 /* epoll timeout */
+
+int epoll_fd;
+#endif
+
+#ifdef __KQUEUE__
+int kq;
 #endif
 
 /* #define BACKLOG 20 */
 #define BACKLOG SOMAXCONN
-#define QUEUE 4 /* events queue for epoll or kqueue, also max workers */
-
-/* #define MAXCONN 32 */
+#define QUEUE 32 /* events queue for epoll or kqueue, also max workers */
 
 #define LOG_FACILITY LOG_LOCAL1
 
 #define BUFSIZE 65536
-
-/* I/O status */
-//#define IO_MORE -3 /* Not all data writed, may be next read can be blocked */
-//#define IO_NONBLOCK -2 /* No data can't be read/write - I/O opration would be block */
-//#define IO_ERR -1 /* I/O error */
-//#define IO_DONE 0 
-
-/* status I/O logical operation */
-#define IO_L_ERR -1 /* logical error */
-#define IO_R_NEED -4 /* Incompelete logical read - must be more data */
-#define IO_W_NEED -3 /* Incompelete write */
-#define IO_R_ERR -2 /* I/O read error */
-#define IO_W_ERR -1 /* I/O write error */
 
 #include "datastruct.hpp"
 
@@ -92,15 +89,34 @@ const char *name = "http_server";
 sock_s cli_socks;
 ssize_t bsize = BUFSIZE;
 
-struct param
+#define TASK_CLOSE 0
+#define TASK_SHUTDOWN 1
+#define TASK_READ 2
+#define TASK_WRITE 3
+
+#define READ 0
+#define SEND 1
+
+typedef struct
+{
+	int sock_fd;
+	short event;
+} task_t;
+
+
+typedef struct
 {
 	char *ip;
 
 	int port;
 	char *root_dir;
-};
+} param_t;
 
-struct param srv_param;
+param_t srv_param;
+
+std::queue<task_t> queue;
+thrdpool_t pool;
+
 
 int log_init(const char *name)
 {
@@ -314,6 +330,7 @@ int daemon_init(const int nochdir, const int noclose, const char *name)
 
 void close_socket(int sock_fd, int err)
 {
+	if (verbose) log_print(LOG_DEBUG, "%d: %s", sock_fd, "close");
 	if (err != ECONNRESET)
 		shutdown(sock_fd, SHUT_RDWR);
 	close(sock_fd);
@@ -342,8 +359,7 @@ ssize_t send_to_socket(int sock_fd, char *buf, size_t size)
 			errno = ECONNRESET;
 			/* close_socket(sock_fd, s, errno); */
 			break;
-		}
-		else if (s == -1)
+		} else if (s == -1)
 		{
 			if (errno == EINTR) /* Interrupted by signal - retry read */
 			{
@@ -363,8 +379,7 @@ ssize_t send_to_socket(int sock_fd, char *buf, size_t size)
 			*/
 			else
 				break; /* Non-block I/O */
-		}
-		else
+		} else
 		{
 			if ( errno != 0 ) errno = 0;
 			ssize -= s;
@@ -385,53 +400,52 @@ ssize_t send_file(int sock_fd, int fd,
         size_t ssize = size, readsize;
        	ssize_t r, s;
 
-		/* buffer state, all 0 on success */
-		*sended  = 0;
-		*readed = 0;
+	/* buffer state, all 0 on success */
+	*sended  = 0;
+	*readed = 0;
 
         while (ssize > 0)
         {
-			readsize = (ssize > bsize) ? bsize : ssize;
-			if ( (r = read(fd, buf, readsize)) == -1)
-			{
-				if (errno == EINTR) /* Interrupted by signal - retry read */
-				{
-					errno = 0;
-					continue;
-				}
-				else if (errno == EAGAIN || errno == EWOULDBLOCK) /* Block IO */
-				{
-					errno = 0;
-					continue;
-				}
-				else
-					return -1;
-			}
-			else if (r == 0)
-			{
-				if ( errno != 0 ) errno = 0;
-				break;
-			}
-			s = send_to_socket(sock_fd, buf, r);
-			if ( verbose > 1 )
-			{
-				int saveerrno = errno;
-				log_print(LOG_INFO, "%d: read %lu, send %lu, file pos %lu, errno %d", sock_fd, r, s, lseek( fd, 0, SEEK_CUR ), saveerrno);
-				errno = saveerrno;
-			}
-			if ( s >= 0 )
-			{
-				if (s > 0)
-					ssize -= s;
-			}
-			if ( errno != 0 )
-				break;
-        }
-		if ( s >= 0) 
+		readsize = (ssize > bsize) ? bsize : ssize;
+		if ( (r = read(fd, buf, readsize)) == -1)
 		{
-			*readed = r;
-			*sended = s;
+			if (errno == EINTR) /* Interrupted by signal - retry read */
+			{
+				errno = 0;
+				continue;
+			} else if (errno == EAGAIN || errno == EWOULDBLOCK) /* Block IO */
+			{
+				errno = 0;
+				continue;
+			}
+			else
+				return -1;
+		} else if (r == 0)
+		{
+			if ( errno != 0 ) errno = 0;
+			break;
 		}
+
+		s = send_to_socket(sock_fd, buf, r);
+		if ( verbose > 1 )
+		{
+			int saveerrno = errno;
+			log_print(LOG_INFO, "%d: read %lu, send %lu, file pos %lu, errno %d", sock_fd, r, s, lseek( fd, 0, SEEK_CUR ), saveerrno);
+			errno = saveerrno;
+		}
+		if ( s >= 0 )
+		{
+			if (s > 0)
+				ssize -= s;
+		}
+		if ( errno != 0 )
+			break;
+        }
+	if ( s >= 0) 
+	{
+		*readed = r;
+		*sended = s;
+	}
         return size - ssize;
 }
 
@@ -447,23 +461,24 @@ int send_header_file(int sock_fd, const char *path, const char *version,
 	{
 		snprintf(si->buf, si->bsize, not_found_resp_tmpl, version);
 		*status = HTTP_NOT_FOUND;
-	}
-	else
+	} else
 	{
 		if ( fstat(si->fd, &fd_stat) == -1 || (fd_stat.st_mode & S_IFMT) != S_IFREG )
 		{
 			snprintf(si->buf, si->bsize, not_found_resp_tmpl, version);
 			close(si->fd); si->fd = -1;
 			*status = HTTP_NOT_FOUND;
-		}
-		else
+		} else
 		{
 			const char *mime_type = mime_type_by_file_ext(si->buf);
-			snprintf(si->buf, si->bsize, "%s %s\r\nContent-Type: %s\r\n\r\n", 
+			si->fsize = fd_stat.st_size;
+			snprintf(si->buf, si->bsize, "%s %s\r\nContent-Type: %s\r\n"
+				 "Content-Length: %lu\r\n"
+				 "\r\n", 
 				 version,
 				 ok_resp_tmpl_s,
-				 mime_type);
-			si->fsize = fd_stat.st_size;
+				 mime_type,
+				 si->fsize);
 		}
 	}
 	si->r = strlen(si->buf);
@@ -678,18 +693,119 @@ void client_register(int sock_fd, SA_IN *cli_addr)
 	add_socket(&cli_socks, sock_fd, NULL);
 }
 
+void do_task(task_t *task)
+{
+	sock_item *si;
+	int res = 0;
+	if ( (si = find_socket(&cli_socks, task->sock_fd)) == NULL )
+	{
+		log_print(LOG_ERR, "%s", "socket descriptor not in table");
+		close_socket(task->sock_fd, -1); 
+	} else if ( si->process == 0 )
+	{
+		si->process = 1;
+		if (task->event == READ)
+		{
+			res = read_socket(task->sock_fd, si);
+			if ( res == EAGAIN || res == EWOULDBLOCK )
+			{
+				if ( si->block == 0 )
+				{
+					if (verbose) log_print( LOG_INFO, "%d: %s", task->sock_fd, "async" );
+#if defined(__EPOLL__)
+					struct epoll_event event;
+					EPOLL_EVENT_SET( event, task->sock_fd, EPOLLET | EPOLLOUT | EPOLLIN | EPOLLRDHUP );
+					if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, task->sock_fd, &event) == -1)
+						log_print_errno(LOG_ERR, errno, "epoll mod", NULL);
+#elif defined(__KQUEUE__)
+					struct kevent event;
+					memset(&event, 0, sizeof(event));
+					EV_SET(&event, task->sock_fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, NULL);
+					if (kevent(kq, &event, 1, NULL, 0, NULL) < 0)
+						log_print_errno(LOG_ERR, errno, "kevent set", NULL);
+#endif
+					else
+                        		        si->block = 1;
+				}
+				si->process = 0;
+			}
+			else
+				close_socket(task->sock_fd, 0); 
+		} else if (task->event == SEND)
+		{
+			res = complete_send(task->sock_fd, si);
+			if ( res != EAGAIN && res != EWOULDBLOCK )
+				close_socket(task->sock_fd, -1);
+			else
+				si->process = 0;
+		}
+
+	}
+}
+
+void *process(void *thrdpool)
+{
+	thrdpool_t *pool = (thrdpool_t *) thrdpool;
+	while (! pool->shutdown)
+	{
+		/* Wait on condition variable */
+		pthread_mutex_lock(&(pool->lock));
+		pthread_cond_wait(&(pool->notify), &(pool->lock));
+	
+		if (pool->shutdown)
+			break;
+		while (! pool->shutdown)
+		{
+			/* Do blocked part of task, for example read from queue */
+			if (queue.size() == 0)
+			{
+				pthread_mutex_unlock(&(pool->lock));
+				break;
+			}
+			task_t task = queue.front();
+			queue.pop();
+			/* Unlock */
+			pthread_mutex_unlock(&(pool->lock));
+
+			/* Do a task */
+			do_task(&task);
+
+			/* Lock and try get task from queue */
+			pthread_mutex_lock(&(pool->lock));
+		}
+	}
+	pthread_mutex_unlock(&(pool->lock));
+	return NULL;
+}
+
+int queue_io(int sock_fd, short event)
+{
+	int ec = 0;
+	task_t task;
+	task.sock_fd = sock_fd;
+	task.event = event;
+	if (queue.size() > WORKQUEUE)
+	{
+		if (verbose) log_print(LOG_DEBUG, "%s", "queue full");
+		return 1;
+	}
+       	queue.push(task);
+	if ( (ec = thrdpool_notify(&pool)) )
+		log_print(LOG_ERR, "%s", thrdpool_error[ec]);
+	return ec;
+}
+
 #ifdef __EPOLL__
 int loop_epoll(int srv_fd) 
 {
 	int ec = 0;
-	int res = 0;
 
 	int cli_fd;
 
 	socklen_t cli_addrlen;
 	SA_IN cli_addr;
 
-	int epoll_fd, n_events, i; /* for epoll */
+	int n_events, i; /* for epoll */
 	struct epoll_event event, events[QUEUE];
 
 	//ssize_t r;
@@ -729,7 +845,7 @@ int loop_epoll(int srv_fd)
 				{
 					set_nonblock(cli_fd);
 					client_register(cli_fd, &cli_addr);
-					EPOLL_EVENT_SET( event, cli_fd, EPOLLIN | EPOLLRDHUP );
+					EPOLL_EVENT_SET( event, cli_fd, EPOLLET | EPOLLIN | EPOLLRDHUP );
 					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cli_fd, &event) == -1)
 						log_print_errno(LOG_ERR, ec, "epoll add", NULL);
 				}
@@ -742,47 +858,14 @@ int loop_epoll(int srv_fd)
 					close_socket(events[i].data.fd, errno);
 				else if (events[i].events & EPOLLIN)
 				{
-					sock_item *si;
-					if ( (si = find_socket(&cli_socks, events[i].data.fd)) == NULL )
-					{
-						log_print(LOG_ERR, "%s", "socket descriptor not in table");
-						close_socket(events[i].data.fd, -1); 
-					}
-					else
-					{
-						res = read_socket(events[i].data.fd, si);
-						if ( res == EAGAIN || res == EWOULDBLOCK )
-						{
-							if ( si->block == 0 )
-							{
-								if (verbose) log_print( LOG_INFO, "%d: %s", events[i].data.fd, "async" );
-								EPOLL_EVENT_SET( event, events[i].data.fd, EPOLLOUT | EPOLLIN | EPOLLRDHUP );
-								if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, events[i].data.fd, &event) == -1)
-									log_print_errno(LOG_ERR, ec, "epoll mod", NULL);
-								else
-									si->block = 1;
-							}
-						}
-						else
-							close_socket(events[i].data.fd, 0); 
-					}
+					if (queue_io(events[i].data.fd, READ))
+						close_socket(events[i].data.fd, 0); 
 				}
 				else if (events[i].events & EPOLLOUT)
 				{
-					sock_item *si;
-					if ( (si = find_socket(&cli_socks, events[i].data.fd)) == NULL )
-					{
-						log_print(LOG_ERR, "%s", "socket descriptor not in table");
-						close_socket(events[i].data.fd, -1); 
-					}
-					else
-					{
-						res = complete_send(events[i].data.fd, si);
-						if ( res != EAGAIN && res != EWOULDBLOCK )
-							close_socket(events[i].data.fd, -1); 
-					}
+					if (queue_io(events[i].data.fd, SEND))
+						close_socket(events[i].data.fd, 0); 
 				}
-
 			}
 		}
 	}
@@ -805,8 +888,7 @@ int loop_kqueue(int srv_fd)
 	socklen_t cli_addrlen;
 	SA_IN cli_addr;
 
-	int kq;
- 	struct kevent event, events[QUEUE];
+	struct kevent event, events[QUEUE];
 
 	ssize_t r;
 
@@ -851,31 +933,8 @@ int loop_kqueue(int srv_fd)
 				}
 				else if (events[i].filter == EVFILT_READ)
 				{
-					sock_item *si;
-					if ( (si = find_socket(&cli_socks, events[i].ident)) == NULL )
-					{
-						log_print(LOG_ERR, "%s", "socket descriptor not in table");
-						close_socket(events[i].ident, -1); 
-					}
-					else
-					{
-						res  = read_socket(events[i].ident, si);
-						if ( res == EAGAIN || res == EWOULDBLOCK )
-						{
-							if ( si->block == 0 )
-							{
-								if (verbose) log_print( LOG_INFO, "%d: %s", events[i].ident, "async" );
-								memset(&event, 0, sizeof(event));
-								EV_SET(&event, events[i].ident, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, NULL);
-								if (kevent(kq, &event, 1, NULL, 0, NULL) < 0)
-									log_print_errno(LOG_ERR, errno, "kevent set", NULL);
-								else
-									si->block = 1;
-							}
-						}
-						else
-							close_socket(events[i].ident, 0); 
-					}
+					if (queue_io(events[i].ident, READ))
+						close_socket(events[i].ident, 1); 
 				}
 				else if (events[i].filter == EVFILT_WRITE)
 				{
@@ -885,15 +944,12 @@ int loop_kqueue(int srv_fd)
 						log_print(LOG_ERR, "%s", "socket descriptor not in table");
 						close_socket(events[i].ident, -1); 
 					}
-					else
+					else if ( si->process == 0 )
 					{
-						res = complete_send(events[i].ident, si);
-						if ( res != EAGAIN && res != EWOULDBLOCK )
-							close_socket(events[i].ident, -1); 
+						if (queue_io(events[i].ident, SEND))
+							close_socket(events[i].ident, 1); 
 					}
 				}
-
-
 			}
 		} /* event process loop */
 	}
@@ -1031,9 +1087,18 @@ int main(int argc, char *argv[])
 	
 	if ((pid = daemon_init(0, 0, name)) == -1)
 		exit(1);
-	else if (pid == 0) { /* child */
-		start_server();
+	else if (pid == 0) /* child */
+	{	
+		int ec = 0;
+		pthread_attr_t t_attr;
+		ECN( (ec = pthread_attr_init(&t_attr)) != 0, EXIT, PERROR("pthread_attr", ec) ) ;
+		if ( (ec = thrdpool_init(&pool, WORKERS, t_attr, process)) )
+		     log_print(LOG_ERR, "%s", thrdpool_error[ec]);
+		else
+			start_server();
+EXIT:
 		exit(0);
 	}
 	return 0;
 }
+

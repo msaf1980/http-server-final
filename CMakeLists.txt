@@ -6,11 +6,11 @@ project( ${BIN} )
 set( SOURCE_ROOT src )
 #Scan dir for standart source files (*.c, *.cpp, etc)
 aux_source_directory( ${SOURCE_ROOT} SOURCES )
+include_directories( ${SOURCE_ROOT} )
 
 # files with small reused procedures
 set( SOURCE_EXT external )
 aux_source_directory( ${SOURCE_EXT} SOURCES )
-
 include_directories( ${SOURCE_EXT} )
 
 # install path for make install
@@ -18,6 +18,7 @@ set( INSTALL_PATH /usr/local/bin/ )
 
 set( REQUIRED_LIBRARIES
 	stdc++
+	pthread
 )
 
 set( C_FLAGS_DEBUG "-O0 -g3 -DDEBUG -pipe -Wall" )
