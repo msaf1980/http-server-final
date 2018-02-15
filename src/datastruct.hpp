@@ -7,10 +7,13 @@
 //#include "sparsepp/spp.h"
 #include <unordered_map>
 
+#include "procspawn.h"
+
 typedef struct
 {
 	int sock_fd; /* socket descriptor */
 	int fd; /* file descriptor */
+	proc_pipes cgi; /* cgi process */
 	size_t fsize; /* file size */
 	char *buf; /* buffer for non-block I/O */
 	size_t bsize; /* buffer size */
@@ -18,8 +21,7 @@ typedef struct
 	size_t s; /* send bytes from buffer */
 	ssize_t sended; /* total send bytes for data, not header */
 	short block; /* block I/O event */
-	short process;
-	//short send; /* send in progress */
+	short process; /* processed now */
 } sock_item;
 
 #define SOCK_ITEM_INIT(si, sd) \

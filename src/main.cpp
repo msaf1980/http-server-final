@@ -54,6 +54,8 @@ extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 #include "httputils.hpp"
 #include "httpsrvutils.h"
 #include "thrdpool.h"
+#include "procspawn.h"
+#include "procutils.h"
 
 #define WORKERS 4
 #define WORKQUEUE  256 
@@ -97,8 +99,10 @@ ssize_t bsize = BUFSIZE;
 #define TASK_READ 2
 #define TASK_WRITE 3
 
-#define READ 0
-#define SEND 1
+#define Q_READ 0
+#define Q_SEND 1
+#define Q_SHUTDOWN 2
+#define Q_CLOSE 3
 
 typedef struct
 {
@@ -333,7 +337,7 @@ int daemon_init(const int nochdir, const int noclose, const char *name)
 
 void close_socket(int sock_fd, int err)
 {
-	if (verbose) log_print(LOG_DEBUG, "%d: %s", sock_fd, "close");
+	if (verbose) log_print(LOG_INFO, "%d: %s (%d)", sock_fd, "close", err);
 	if (err != ECONNRESET)
 		shutdown(sock_fd, SHUT_RDWR);
 	close(sock_fd);
@@ -452,13 +456,26 @@ ssize_t send_file(int sock_fd, int fd,
         return size - ssize;
 }
 
-int send_header_file(int sock_fd, const char *path, const char *version, 
+void log_exit_status(const int sock_fd, const char *name, int status)
+{
+	if ( WIFEXITED(status) )
+	{
+		int es = WEXITSTATUS(status);
+		log_print(LOG_ERR, "%d: %s exit with %d", sock_fd, name, es);
+	} else if (WIFSIGNALED(status))
+		log_print(LOG_ERR, "%d: %s killed by signal %d", sock_fd, name, WTERMSIG(status));
+	else if (WIFSTOPPED(status))
+		log_print(LOG_ERR, "%d: %s stopped by signal %d", sock_fd, name, WSTOPSIG(status));
+}
+
+int send_header_file(int sock_fd, const short head, const char *path, const char *param, const char *version, 
 			 sock_item *si, int *status)
 {
 	struct stat fd_stat;
 	ssize_t s;
 	*status = 0;
 	si->r = 0; si->s = 0;
+	//int i;
 	sprintf(si->buf, "%s%s", srv_param.root_dir, path);
 	if ( (si->fd = open(si->buf, O_RDONLY)) == -1 )
 	{
@@ -471,7 +488,60 @@ int send_header_file(int sock_fd, const char *path, const char *version,
 			snprintf(si->buf, si->bsize, not_found_resp_tmpl, version);
 			close(si->fd); si->fd = -1;
 			*status = HTTP_NOT_FOUND;
-		} else
+		} /* else if ( fd_stat.st_mode & S_IXUSR && 
+			( fd_stat.st_mode & S_IXGRP || fd_stat.st_mode & S_IXOTH ) )
+		{
+			int n;
+			ssize_t r;
+			char *arg[] = { si->buf, NULL };
+			char **env = arg_parse(param, &n, '&');
+			close(si->fd); si->fd = -1;
+			if ( (si->cgi.pid = proc_spawn(arg[0], arg, env, si->cgi.pipes, 1)) == -1 )
+			{
+				r  = -1;
+				log_print_errno(LOG_ERR, errno, "proc_spawn", NULL);
+			}
+			else
+			{
+				set_nonblock(si->cgi.pipes[1]);
+				for (i = 0; i < 5; i++)
+				{
+					if ( (r = read(si->cgi.pipes[1], si->buf, si->bsize - 1)) > 0 )
+					{
+						char *p = strstr(si->buf, "\r\n\r\n");
+						if (p == NULL)
+							r = -1;
+						else if (head)
+							p[4] = '\0';
+						break;
+					}
+					else if ( r == 0 || 
+						  (r == -1 && (errno != EAGAIN && errno != EWOULDBLOCK)) )
+						break;
+				}
+			}
+			if (r == -1 || r == 0)
+			{
+				log_print_errno(LOG_ERR, errno, "cgi read", NULL);
+				r = read(si->cgi.pipes[2], si->buf, si->bsize - 1);
+				if (r > 0)
+				{
+					si->buf[r] = '\0';
+					log_print(LOG_ERR, "%d: %s: %s", si->sock_fd, path, si->buf);
+				}
+				snprintf(si->buf, si->bsize, internal_err_resp_tmpl, version);
+				*status = HTTP_INTERNAL_ERR;
+			}
+			else if (verbose > 2)
+				log_print(LOG_INFO, "%s", si->buf);
+			if ( head || r <= 0 )
+			{
+				PROC_CLOSE(si->cgi, &n);
+				if (r <= 0)
+					log_exit_status(sock_fd, path, n);
+			}
+			arg_free(&env);
+		} */ else
 		{
 			const char *mime_type = mime_type_by_file_ext(si->buf);
 
@@ -489,7 +559,8 @@ int send_header_file(int sock_fd, const char *path, const char *version,
 			snprintf(si->buf, si->bsize, "%s %s\r\nContent-Type: %s\r\n"
 				 "Date: %s\r\n"
 				 "Last-Modified: %s\r\n"
-				 "Accept-Ranges: bytes\r\n"
+				 "Accept-Ranges: none\r\n"
+				 "Connection: close\r\n"
 				 "Content-Length: %lu\r\n"
 				 "\r\n", 
 				 version,
@@ -571,7 +642,7 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 
 	if ( si->r == 0 )
 		return EINVAL;
-	std::string type = "-", version = "-", path = "-";
+	std::string type = "-", version = "-", path = "-", param;
 
 	const char *header_end = parse_http_req_header(si->buf, si->buf + si->r, header);
 	auto h_type = header.find("Type");
@@ -579,6 +650,8 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 	if (h_version != header.end()) version = h_version->second;
 	auto h_path = header.find("Path");
 	if (h_path != header.end()) path = h_path->second;
+	auto h_param = header.find("Param");
+	if (h_param != header.end()) param = h_param->second;
 
 	if (verbose > 1) log_print(LOG_INFO, "%s", path.c_str());
 
@@ -595,10 +668,12 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 			type = h_type->second;
 
 			if ( type == "HEAD" )
-				return send_header_file(sock_fd, path.c_str(), version.c_str(), si, &status);
+				return send_header_file(sock_fd, 1, path.c_str(), param.c_str(),
+							version.c_str(), si, &status);
 			else if ( type == "GET" )
 			{
-				res = send_header_file(sock_fd, path.c_str(), version.c_str(), si, &status);
+				res = send_header_file(sock_fd, 0, path.c_str(), param.c_str(),
+						       version.c_str(), si, &status);
 				if ( res != 0 )
 					return res;
 				/* set_nonblock(si->fd); */
@@ -714,6 +789,8 @@ void client_register(int sock_fd, SA_IN *cli_addr)
 	add_socket(&cli_socks, sock_fd, NULL);
 }
 
+int queue_io(int sock_fd, short event, short force);
+
 void do_task(task_t *task)
 {
 	sock_item *si;
@@ -725,7 +802,7 @@ void do_task(task_t *task)
 	} else if ( si->process == 0 )
 	{
 		si->process = 1;
-		if (task->event == READ)
+		if (task->event == Q_READ)
 		{
 			res = read_socket(task->sock_fd, si);
 			if ( res == EAGAIN || res == EWOULDBLOCK )
@@ -752,16 +829,22 @@ void do_task(task_t *task)
 			}
 			else
 				close_socket(task->sock_fd, 0); 
-		} else if (task->event == SEND)
+		} else if (task->event == Q_SEND)
 		{
 			res = complete_send(task->sock_fd, si);
-			if ( res != EAGAIN && res != EWOULDBLOCK )
-				close_socket(task->sock_fd, -1);
-			else
+			if ( res == 0 )
+				close_socket(task->sock_fd, 0);
+			else if ( res != EAGAIN && res != EWOULDBLOCK )
+				close_socket(task->sock_fd, 1);
+			else /* Non-block I/O */
 				si->process = 0;
-		}
-
+		} else if (task->event == Q_CLOSE)
+			close_socket(task->sock_fd, 0);
+		else if (task->event == Q_SHUTDOWN)
+			close_socket(task->sock_fd, 1);
 	}
+	else /* in progress, requeue */
+		queue_io(task->sock_fd, task->event, 1);
 }
 
 void *process(void *thrdpool)
@@ -799,13 +882,13 @@ void *process(void *thrdpool)
 	return NULL;
 }
 
-int queue_io(int sock_fd, short event)
+int queue_io(int sock_fd, short event, short force)
 {
 	int ec = 0;
 	task_t task;
 	task.sock_fd = sock_fd;
 	task.event = event;
-	if (queue.size() > WORKQUEUE)
+	if (queue.size() > WORKQUEUE && force == 0)
 	{
 		if (verbose) log_print(LOG_DEBUG, "%s", "queue full");
 		return 1;
@@ -816,8 +899,8 @@ int queue_io(int sock_fd, short event)
 	return ec;
 }
 
-#ifdef __EPOLL__
-int loop_epoll(int srv_fd) 
+#if defined(__EPOLL__)
+int loop_queue(int srv_fd) 
 {
 	int ec = 0;
 
@@ -874,18 +957,18 @@ int loop_epoll(int srv_fd)
 			else
 			{
 				if (events[i].events & (EPOLLHUP | EPOLLERR))
-					close_socket(events[i].data.fd, errno);
+					queue_io(events[i].data.fd, Q_CLOSE, 1); 
 				else if (events[i].events & EPOLLRDHUP)
-					close_socket(events[i].data.fd, errno);
+					queue_io(events[i].data.fd, Q_CLOSE, 1); 
 				else if (events[i].events & EPOLLIN)
 				{
-					if (queue_io(events[i].data.fd, READ))
-						close_socket(events[i].data.fd, 0); 
+					if (queue_io(events[i].data.fd, Q_READ, 0))
+						queue_io(events[i].data.fd, Q_SHUTDOWN, 1); 
 				}
 				else if (events[i].events & EPOLLOUT)
 				{
-					if (queue_io(events[i].data.fd, SEND))
-						close_socket(events[i].data.fd, 0); 
+					if (queue_io(events[i].data.fd, Q_SEND, 0))
+						queue_io(events[i].data.fd, Q_SHUTDOWN, 1); 
 				}
 			}
 		}
@@ -895,10 +978,9 @@ CLEAN:
 EXIT:
 	return ec;
 }
-#endif /* epoll */ 
-
-#ifdef __KQUEUE__
-int loop_kqueue(int srv_fd)
+/* end epoll */ 
+#elif defined(__KQUEUE__)
+int loop_queue(int srv_fd)
 {
 	int ec = 0;
 	int res = 0;
@@ -949,13 +1031,11 @@ int loop_kqueue(int srv_fd)
 			else
 			{
 				if (events[i].flags & EV_EOF)
-				{
-					close_socket(events[i].ident, 0);
-				}
+					queue_io(events[i].ident, Q_CLOSE, 1); 
 				else if (events[i].filter == EVFILT_READ)
 				{
-					if (queue_io(events[i].ident, READ))
-						close_socket(events[i].ident, 1); 
+					if (queue_io(events[i].ident, READ, 0))
+						queue_io(events[i].ident, Q_SHUTDOWN, 1); 
 				}
 				else if (events[i].filter == EVFILT_WRITE)
 				{
@@ -963,12 +1043,12 @@ int loop_kqueue(int srv_fd)
 					if ( (si = find_socket(&cli_socks, events[i].ident)) == NULL )
 					{
 						log_print(LOG_ERR, "%s", "socket descriptor not in table");
-						close_socket(events[i].ident, -1); 
+						close_socket(events[i].ident, 1); 
 					}
 					else if ( si->process == 0 )
 					{
-						if (queue_io(events[i].ident, SEND))
-							close_socket(events[i].ident, 1); 
+						if (queue_io(events[i].ident, SEND, 0))
+							queue_io(events[i].ident, Q_SHUTDOWN, 1); 
 					}
 				}
 			}
@@ -1007,12 +1087,10 @@ int start_server()
 
 	log_print(LOG_INFO, "%s", "startup");
 
-#ifdef __EPOLL__
-	ec = loop_epoll(srv_fd);
-#endif
-#ifdef __KQUEUE__
-	ec = loop_kqueue(srv_fd);
-#endif 
+	ec = loop_queue(srv_fd);
+	
+	if (verbose) log_print(LOG_INFO, "%s", "close sockets");
+	thrdpool_destroy(&pool, THRDPOOL_SHUT_IMMEDIATE);
 
 	for ( auto it = cli_socks.begin(); it != cli_socks.end(); )
 	{

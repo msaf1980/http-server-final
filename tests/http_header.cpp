@@ -7,6 +7,7 @@
 #include "minunit.h"
 
 #include "httputils.hpp"
+#include "procutils.h"
 
 typedef std::unordered_map<std::string, std::string> header_map;
 typedef header_map::iterator header_map_it;
@@ -46,6 +47,17 @@ MU_TEST(test_header_get)
 	mu_assert(end > msg, "header is correct, but parse failed");
 	mu_assert(header["Path"] == "/test.cgi", "header parse failed, check path");
 	mu_assert(header["Param"] == "name=ferret&color=purple", "header parse failed, can't extract query param");
+
+	int n_arg;
+	char **arg = arg_parse(header["Param"].c_str(), &n_arg, '&');
+	if ( n_arg == 2 )
+	{
+		mu_check( strcmp(arg[0], "name=ferret") == 0 );
+		mu_check( strcmp(arg[1], "color=purple") == 0 );
+		mu_check( arg[2] == NULL );
+	} else
+		mu_fail("GET param parse failed");
+	arg_free(&arg);
 
 	msg = "GET /test.cgi? HTTP/1.1\r\nUser-Agent: curl/7.29.0\r\nHost: 127.0.0.1:12345\r\nAccept: */*\r\n\r\n";
 	end = parse_http_req_header(msg, msg + strlen(msg), header);

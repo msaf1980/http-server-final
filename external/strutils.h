@@ -33,9 +33,6 @@ int vsnprintf_l(char **p, size_t initsize, size_t maxsize, const char *fmt, ...)
 /* return 1 if string contain only digits, else return 0 */
 int is_num(char *str);
 
-/* return 1 if IPv4 string is valid, else return 0 */
-int is_valid_ipv4(char *ip_str);
-
 #ifdef __cplusplus
 }
 #endif

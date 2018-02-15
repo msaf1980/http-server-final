@@ -9,4 +9,4 @@
 
 #define HTTP_BAD_REQ 400
 #define HTTP_NOT_FOUND 404
-
+#define HTTP_INTERNAL_ERR 500

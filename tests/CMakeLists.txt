@@ -7,7 +7,7 @@ include_directories( . ../src ../external )
 #add test sources
 file( GLOB TEST_SOURCES *.c *.cpp )
 
-file( GLOB LIB_SOURCE_FILES ../external/httputils.cpp )
+file( GLOB LIB_SOURCE_FILES ../external/httputils.cpp ../external/procutils.c )
 add_library( source_lib ${LIB_SOURCE_FILES} )
 
 #set enable testing

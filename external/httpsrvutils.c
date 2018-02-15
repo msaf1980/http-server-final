@@ -44,3 +44,14 @@ const char* unsup_req_resp_tmpl =
       " </body>\r\n"
       "</html>\r\n";
 
+const char* internal_err_resp_tmpl = 
+      "%s 500 Internal Server Error\r\n"
+      "Content-type: text/html\r\n"
+      "\r\n"
+      "<html>\r\n"
+      " <body>\r\n"
+      "  <h1>Internal Server Error</h1>\r\n"
+      "  <p>Internal Server Error.</p>\r\n"
+      " </body>\r\n"
+      "</html>\r\n";
+

@@ -15,6 +15,7 @@ sock_item *add_socket(sock_s *fds, int sock_fd, short *found)
 	sock_item si;
 	std::pair<sock_s_it, bool> ret;
 	SOCK_ITEM_INIT(si, sock_fd);
+	PROC_PIPES_INIT(si.cgi);
 	ret = fds->insert(std::make_pair(sock_fd, si));
 	if (found)
 	{
@@ -42,6 +43,7 @@ int delete_socket_iter(sock_s *fds, sock_s_it s)
 	if (s == fds->end())
 		return 0;
 	SOCK_ITEM_FREE(s->second);
+	PROC_CLOSE(s->second.cgi, NULL);
 	fds->erase(s);
 	return 1;	
 }
