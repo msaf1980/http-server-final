@@ -653,7 +653,6 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 	auto h_param = header.find("Param");
 	if (h_param != header.end()) param = h_param->second;
 
-	if (verbose > 1) log_print(LOG_INFO, "%s", path.c_str());
 
 	/* Incomplete header */
 	if ( header_end == si->buf || path == "-" ||
@@ -666,6 +665,8 @@ int process_request(int sock_fd, const char *ip, sock_item *si)
 		else
 		{
 			type = h_type->second;
+			if (verbose > 1) log_print(LOG_INFO, "%d: %s %s %s", sock_fd, type.c_str(),
+						   version.c_str(), path.c_str());
 
 			if ( type == "HEAD" )
 				return send_header_file(sock_fd, 1, path.c_str(), param.c_str(),
