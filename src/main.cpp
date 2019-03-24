@@ -48,20 +48,20 @@ extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
 #include "errorhandle.h"
 #include "fileutils.h"
 #include "strutils.h"
-#include "netutils.h"
-#include "httpcodes.h"
-#include "mimetypes.h"
-#include "httputils.hpp"
-#include "httpsrvutils.h"
-#include "thrdpool.h"
-#include "procspawn.h"
-#include "procutils.h"
+#include "netutil/netutils.h"
+#include "netutil/httpcodes.h"
+#include "netutil/mimetypes.h"
+#include "netutil/httputils.hpp"
+#include "netutil/httpsrvutils.h"
+#include "pthreadutil/thrdpool.h"
+#include "procspawn/procspawn.h"
+#include "procutil/procutil.h"
 
 #define WORKERS 4
-#define WORKQUEUE  256 
+#define WORKQUEUE  256
 
 #ifdef __EPOLL__
-#include "epollutils.h"
+#include "netutil/epollutils.h"
 #define EPOLL_TOUT -1 /* epoll timeout */
 
 int epoll_fd;
@@ -87,7 +87,7 @@ short running = 1;
 short verbose = 0;
 short noclose = 0;
 short use_sendfile = 0;
-const char *name = "http_server"; 
+const char *name = "http_server";
 
 const char *time_format = "%a, %d %b %Y %H:%M:%S %Z";
 
@@ -114,8 +114,8 @@ typedef struct
 typedef struct
 {
 	char *ip;
-
 	int port;
+
 	char *root_dir;
 } param_t;
 
@@ -1107,7 +1107,9 @@ EXIT:
 
 int main(int argc, char *argv[])
 {
-	int pid;
+	int pid = 0;
+
+	int foreground = 0;
 
 	srv_param.ip = NULL;
 	srv_param.port = 12345;
@@ -1116,13 +1118,14 @@ int main(int argc, char *argv[])
 	int opt = 0;
 	int opt_idx = 0;
 	
-	const char *opts = "h:p:d:sv:";
+	const char *opts = "h:p:d:sv:f";
 	const struct option long_opts[] = {
 		{ "ip",   required_argument, 0,  'h' },
 		{ "port", required_argument, 0,  'p' },
 		{ "dir",  required_argument, 0,  'd' },
 		{ "sendfile", no_argument, 0,  's' },
 		{ "verbose", required_argument,  0,  'v' },
+		{ "foreground", no_argument,  0,  'f' },
 		{ 0, 0, 0, 0 }
 	};
 	
@@ -1156,6 +1159,9 @@ int main(int argc, char *argv[])
 			case 's':
 				use_sendfile = 1;
 				break;
+			case 'f':
+				foreground = 1;
+				break;
 			case 'v':
 				if ( is_num( optarg ) )
 					verbose = atoi( optarg );
@@ -1184,10 +1190,8 @@ int main(int argc, char *argv[])
 	       fprintf (stderr, "root dir not set\n");
 	       exit(1);
 	}
-	
-	if ((pid = daemon_init(0, 0, name)) == -1)
-		exit(1);
-	else if (pid == 0) /* child */
+
+	if (foreground || pid == 0) /* child or foreground */
 	{	
 		int ec = 0;
 		pthread_attr_t t_attr;
@@ -1198,6 +1202,9 @@ int main(int argc, char *argv[])
 			start_server();
 EXIT:
 		exit(0);
+	} 
+	else if ((pid = daemon_init(0, 0, name)) == -1) {
+		exit(1);
 	}
 	return 0;
 }

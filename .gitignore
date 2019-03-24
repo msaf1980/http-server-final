@@ -33,6 +33,7 @@
 *.so.*
 
 # Executables
+_*
 final
 
 ### Cmake

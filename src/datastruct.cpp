@@ -35,7 +35,7 @@ int delete_socket(sock_s *fds, int sock_fd)
 		return 0;
 	SOCK_ITEM_FREE(s->second);
 	fds->erase(s);
-	return 1;	
+	return 1;
 }
 
 int delete_socket_iter(sock_s *fds, sock_s_it s)
@@ -45,6 +45,5 @@ int delete_socket_iter(sock_s *fds, sock_s_it s)
 	SOCK_ITEM_FREE(s->second);
 	PROC_CLOSE(s->second.cgi, NULL);
 	fds->erase(s);
-	return 1;	
+	return 1;
 }
-
