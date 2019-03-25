@@ -34,6 +34,7 @@ set( INSTALL_PATH /usr/local/bin/ )
 set( LIBRARIES
 	stdc++
 	pthread
+	log4cpp
 )
 
 set( C_FLAGS_DEBUG "-O0 -g3 -DDEBUG -pipe -Wall" )
