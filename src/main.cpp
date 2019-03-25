@@ -1090,7 +1090,21 @@ EXIT:
 	return ec;
 }
 
-int main(int argc, char *argv[])
+void usage(const char *name) {
+	fprintf(stderr, "use: %s [OPTIONS]\n", name);
+    fprintf(stderr, 
+            "\t[ --ip | -i ] LISTEN_IP (default: 127.0.0.1)\n"
+            "\t[ --port | -p ] LISTEN_PORT (default: 8080)\n"
+            "\t[ --dir | -d ] ROOT_DIR (default: .)\n"
+            "\t[ --sendfile | -s ] (default: no)\n"
+            "\t[ --verbose | -v ] LOG_LEVEL (default: LOG_WARN)\n"
+            "\t[ --foreground | -f ] (default: no)\n"
+        );
+
+	exit(EXIT_FAILURE);
+}
+
+int main(int argc, char * const argv[])
 {
 	int pid = 0;
 
@@ -1103,9 +1117,10 @@ int main(int argc, char *argv[])
 	int opt = 0;
 	int opt_idx = 0;
 	
-	const char *opts = "h:p:d:sv:f";
+	const char *opts = "hi:p:d:sv:f";
 	const struct option long_opts[] = {
-		{ "ip",   required_argument, 0,  'h' },
+        { "help", no_argument, 0,  'h' },
+		{ "ip",   required_argument, 0,  'i' },
 		{ "port", required_argument, 0,  'p' },
 		{ "dir",  required_argument, 0,  'd' },
 		{ "sendfile", no_argument, 0,  's' },
@@ -1120,9 +1135,12 @@ int main(int argc, char *argv[])
 		{
 			case '?': /* unknown command */
 				return EXIT_FAILURE;
+            case 'h':
+                usage(argv[0]);
+                break;
 			case 0: /* binded option, set by getopt */
 				break;
-			case 'h':
+			case 'i':
 				srv_param.ip = optarg;
 				if (is_valid_ipv4(srv_param.ip) == 0)
 				{
