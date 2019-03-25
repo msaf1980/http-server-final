@@ -29,23 +29,8 @@
 
 #include <queue>
 
-#ifdef _GNU_SOURCE
-#ifdef __cplusplus
-extern "C"
-{
-#endif
-
-/* force switch to posix-compliant strerror_r instead of GNU for portability */
-extern int __xpg_strerror_r(int errcode, char* buffer, size_t length);
-#define strerror_r __xpg_strerror_r
-
-#ifdef __cplusplus
-}
-#endif
-#endif
-
-
-#include "errorhandle.h"
+#include <portability.h>
+#include "errors/errorhandle.h"
 #include "fileutils.h"
 #include "strutils.h"
 #include "netutil/netutils.h"
@@ -1208,4 +1193,3 @@ EXIT:
 	}
 	return 0;
 }
-
