@@ -108,7 +108,7 @@ const char *name = "http_server";
 
 const char *time_format = "%a, %d %b %Y %H:%M:%S %Z";
 
-sock_s cli_socks;
+sock_s cli_socks; /* client sockets */
 ssize_t bsize = BUFSIZE;
 
 #define TASK_CLOSE 0
@@ -246,7 +246,7 @@ int daemon_init(const int nochdir, const int noclose, const char *name)
 		/* close all open file descriptors */
 		if (rl.rlim_max == RLIM_INFINITY)
 			rl.rlim_max = 1024;
-		for (i = rl.rlim_max - 1; i >= 0; i--)
+		for (i = 2; i >= 0; i--)
 			close(i);
 
 		/* Set file descriptors 0, 1 и 2 to /dev/null */
@@ -935,7 +935,7 @@ int loop_queue(int srv_fd)
 
 	memset(&event, 0, sizeof(event));
 	EV_SET(&event, srv_fd, EVFILT_READ, EV_ADD, 0, 0, 0);
-	if (kevent(kq, &event, 1, NULL, 0, NULL) == -1)) {
+	if (kevent(kq, &event, 1, NULL, 0, NULL) == -1) {
         ec = errno; _LOG_ERROR_ERRNO(root_logger, ec, "kevent set register listen socket"); goto EXIT;
     }
 	if (event.flags & EV_ERROR) {
@@ -995,7 +995,7 @@ int start_server()
 	SA_IN srv_addr;
 	pthread_attr_t t_attr;
 	if ( (ec = pthread_attr_init(&t_attr)) != 0 ) {
-        _LOG_ERROR_ERRNO(root_logger, ec, "pthread_attr"); goto EXIT; 
+        _LOG_ERROR_ERRNO(root_logger, ec, "pthread_attr"); goto EXIT;
     }
 	if ( (ec = thrdpool_init(&pool, WORKERS, t_attr, process)) != 0) {
 	    _LOG_FATAL(root_logger, "thread pol init: %s", thrdpool_error[ec]); goto EXIT;
@@ -1018,7 +1018,7 @@ int start_server()
     }
 	set_nonblock(srv_fd);
 
-	if (listen(srv_fd, BACKLOG) == -1) { 
+	if (listen(srv_fd, BACKLOG) == -1) {
         ec = errno; _LOG_ERROR_ERRNO(root_logger, ec, "listen"); goto EXIT;
     }
 
@@ -1155,19 +1155,21 @@ int main(int argc, char * const argv[])
 	if (log_file == NULL && foreground == 0)
 	{
 	    fprintf (stderr, "log file not set\n");
-	    return EXIT_FAILURE;    
+	    return EXIT_FAILURE;
 	}
 
 	root_logger = &log4cpp::Category::getRoot();
     root_logger->setPriority(log_level);
-    log4cpp::PatternLayout *layout = new log4cpp::PatternLayout();
-    layout->setConversionPattern("%d [%p] %m%n");
     if (foreground) {
+        log4cpp::PatternLayout *layout = new log4cpp::PatternLayout();
+        layout->setConversionPattern("%d [%p] %m%n");
         log4cpp::Appender *appender = new log4cpp::OstreamAppender("console", &std::cout);
         appender->setLayout(layout);
         root_logger->addAppender(appender);
     }
     if (log_file != NULL) {
+        log4cpp::PatternLayout *layout = new log4cpp::PatternLayout();
+        layout->setConversionPattern("%d [%p] %m%n");
         log4cpp::Appender *appender = new log4cpp::FileAppender("default", log_file);
         appender->setLayout(layout);
         root_logger->addAppender(appender);
