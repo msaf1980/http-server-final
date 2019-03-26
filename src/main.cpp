@@ -929,58 +929,52 @@ int loop_queue(int srv_fd)
 
 	ssize_t r;
 
-	EC_ERRNO( (kq = kqueue()) == -1, EXIT,
-			log_errno(root_logger, ec, "kqueue", NULL) );
+	if ( (kq = kqueue()) == -1) {
+        ec = errno; _LOG_ERROR_ERNNO(root_logger, ec, "kqueue"); goto EXIT;
+    }
 
 	memset(&event, 0, sizeof(event));
 	EV_SET(&event, srv_fd, EVFILT_READ, EV_ADD, 0, 0, 0);
-	EC(  kevent(kq, &event, 1, NULL, 0, NULL) == -1, EXIT, 1,
-			log_print_errno(LOG_ERR, ec, "kevent set register listen socket", NULL) );
-	EC( (event.flags & EV_ERROR), EXIT, 1,
-			log_print_errno(LOG_ERR, event.data, "event error", NULL) );
+	if (kevent(kq, &event, 1, NULL, 0, NULL) == -1)) {
+        ec = errno; _LOG_ERROR_ERRNO(root_logger, ec, "kevent set register listen socket"); goto EXIT;
+    }
+	if (event.flags & EV_ERROR) {
+        ec = 1; _LOG_ERROR_ERRNO(root_logger, event.data, "event error"); goto EXIT;
+    }
 
 	while(running)
 	{
-		EC_ERRNO( (r = kevent(kq, NULL, 0, events, QUEUE, NULL)) == -1, CLEAN,
-				log_print_errno(LOG_ERR, ec, "kevent read", NULL) );
+		if ( (r = kevent(kq, NULL, 0, events, QUEUE, NULL)) == -1 ) {
+            ec = errno; _LOG_ERROR_ERRNO(root_logger, ec, "kevent read"); goto EXIT;
+        }
 
-		for (i = 0; i < r; i++) /* event process loop */
-		{
-			if (events[i].ident == srv_fd)
-			{
+		for (i = 0; i < r; i++) { /* event process loop */
+			if (events[i].ident == srv_fd) {
 				cli_addrlen = sizeof(cli_addr);
 				cli_fd = accept(srv_fd, (SA *) &cli_addr, &cli_addrlen);
-				if (cli_fd < 0)
-					log_print_errno(LOG_ERR, errno, "accept", NULL);
-				else
-				{
+				if (cli_fd < 0) {
+					_LOG_ERROR_ERRNO(root_logger, errno, "accept");
+				} else {
 					set_nonblock(cli_fd);
 					client_register(cli_fd, &cli_addr);
 					memset(&event, 0, sizeof(event));
 					EV_SET(&event, cli_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-					if (kevent(kq, &event, 1, NULL, 0, NULL) < 0)
-						log_print_errno(LOG_ERR, errno, "kevent set", NULL);
+					if (kevent(kq, &event, 1, NULL, 0, NULL) < 0) {
+						_LOG_ERROR_ERRNO(root_logger, errno, "kevent set");
+                    }
 				}
-			}
-			else
-			{
+			} else {
 				if (events[i].flags & EV_EOF)
 					queue_io(events[i].ident, Q_CLOSE, 1);
-				else if (events[i].filter == EVFILT_READ)
-				{
+				else if (events[i].filter == EVFILT_READ) {
 					if (queue_io(events[i].ident, READ, 0))
 						queue_io(events[i].ident, Q_SHUTDOWN, 1);
-				}
-				else if (events[i].filter == EVFILT_WRITE)
-				{
+				} else if (events[i].filter == EVFILT_WRITE) {
 					sock_item *si;
-					if ( (si = find_socket(&cli_socks, events[i].ident)) == NULL )
-					{
-						log_print(LOG_ERR, "%s", "socket descriptor not in table");
+					if ( (si = find_socket(&cli_socks, events[i].ident)) == NULL ) {
+						_LOG_ERROR(root_logger, "socket %d not in table", events[i].ident);
 						close_socket(events[i].ident, 1);
-					}
-					else if ( si->process == 0 )
-					{
+					} else if ( si->process == 0 ) {
 						if (queue_io(events[i].ident, SEND, 0))
 							queue_io(events[i].ident, Q_SHUTDOWN, 1);
 					}
@@ -988,8 +982,6 @@ int loop_queue(int srv_fd)
 			}
 		} /* event process loop */
 	}
-
-CLEAN:
 
 EXIT:
 	return ec;
