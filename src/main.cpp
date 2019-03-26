@@ -48,18 +48,25 @@
 #define _LOG_INFO(__logger, ...)  { (__logger)->info(__VA_ARGS__); }
 #define _LOG_DEBUG(__logger, ...)  { (__logger)->debug(__VA_ARGS__); }
 
-#define _LOG_ERROR_ERRNO(__logger, __errno, descr) { \
+#define _LOG_ERROR_ERRNO(__logger, format, __errno, ...) { \
     char err_buf[1024]; \
     strerror_r((__errno), err_buf, sizeof(err_buf)); \
-    (__logger)->error("%s: %s", descr, err_buf); \
+    (__logger)->error(format, err_buf, __VA_ARGS__); \
 }
 
+#define _LOG_FATAL_ERRNO(__logger, format, __errno, ...) { \
+    char err_buf[1024]; \
+    strerror_r((__errno), err_buf, sizeof(err_buf)); \
+    (__logger)->fatal(format, err_buf, __VA_ARGS__); \
+}
+
+/*
 #define _LOG_FATAL_ERRNO(__logger, __errno, descr) { \
     char err_buf[1024]; \
     strerror_r((__errno), err_buf, sizeof(err_buf)); \
     (__logger)->fatal("%s: %s", descr, err_buf); \
 }
-
+*/
 
 
 #include <portability.h>
@@ -414,29 +421,23 @@ int send_header_file(int sock_fd, const short head, const char *path, const char
 		*status = HTTP_NOT_FOUND;
 	} else
 	{
-		if ( fstat(si->fd, &fd_stat) == -1 || (fd_stat.st_mode & S_IFMT) != S_IFREG )
-		{
+		if ( fstat(si->fd, &fd_stat) == -1 || (fd_stat.st_mode & S_IFMT) != S_IFREG ) {
 			snprintf(si->buf, si->bsize, not_found_resp_tmpl, version);
 			close(si->fd); si->fd = -1;
 			*status = HTTP_NOT_FOUND;
-		} /* else if ( fd_stat.st_mode & S_IXUSR && 
-			( fd_stat.st_mode & S_IXGRP || fd_stat.st_mode & S_IXOTH ) )
-		{
+		} else if ( fd_stat.st_mode & S_IXUSR && 
+			( fd_stat.st_mode & S_IXGRP || fd_stat.st_mode & S_IXOTH ) ) {
 			int n;
 			ssize_t r;
 			char *arg[] = { si->buf, NULL };
 			char **env = arg_parse(param, &n, '&');
 			close(si->fd); si->fd = -1;
-			if ( (si->cgi.pid = proc_spawn(arg[0], arg, env, si->cgi.pipes, 1)) == -1 )
-			{
+			if ( (si->cgi.pid = proc_spawn(arg[0], arg, env, si->cgi.pipes, 1)) == -1 )	{
 				r  = -1;
-				log_print_errno(LOG_ERR, errno, "proc_spawn", NULL);
-			}
-			else
-			{
+				_LOG_ERROR_ERRNO(root_logger, "%s: proc_spawn: %s", errno, arg[0]);
+			} else {
 				set_nonblock(si->cgi.pipes[1]);
-				for (i = 0; i < 5; i++)
-				{
+				for (i = 0; i < 5; i++) {
 					if ( (r = read(si->cgi.pipes[1], si->buf, si->bsize - 1)) > 0 )
 					{
 						char *p = strstr(si->buf, "\r\n\r\n");
@@ -453,12 +454,12 @@ int send_header_file(int sock_fd, const short head, const char *path, const char
 			}
 			if (r == -1 || r == 0)
 			{
-				log_print_errno(LOG_ERR, errno, "cgi read", NULL);
+				_LOG_ERROR_ERRNO(root_logger, "%s: cgi read: %s", errno, arg[0]);
 				r = read(si->cgi.pipes[2], si->buf, si->bsize - 1);
 				if (r > 0)
 				{
 					si->buf[r] = '\0';
-					log_print(LOG_ERR, "%d: %s: %s", si->sock_fd, path, si->buf);
+					_LOG_ERROR(root_logger, "%d: %s: %s", si->sock_fd, path, si->buf);
 				}
 				snprintf(si->buf, si->bsize, internal_err_resp_tmpl, version);
 				*status = HTTP_INTERNAL_ERR;
@@ -472,7 +473,7 @@ int send_header_file(int sock_fd, const short head, const char *path, const char
 					log_exit_status(sock_fd, path, n);
 			}
 			arg_free(&env);
-		} */ else
+		} else
 		{
 			const char *mime_type = mime_type_by_file_ext(si->buf);
 
